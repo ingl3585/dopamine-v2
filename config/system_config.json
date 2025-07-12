@@ -1,0 +1,67 @@
+{
+  "system": {
+    "environment": "development",
+    "log_level": "INFO",
+    "tcp_host": "localhost",
+    "tcp_port_data": 5556,
+    "tcp_port_signals": 5557
+  },
+  "agent": {
+    "learning_rate": 0.001,
+    "discount_factor": 0.99,
+    "exploration_rate": 0.1,
+    "batch_size": 32,
+    "memory_size": 10000,
+    "update_frequency": 100
+  },
+  "subsystems": {
+    "dna": { 
+      "enabled": true, 
+      "weight": 0.2,
+      "pattern_length": 10,
+      "mutation_rate": 0.01
+    },
+    "temporal": { 
+      "enabled": true, 
+      "weight": 0.2,
+      "cycle_lengths": [5, 15, 60, 240],
+      "lookback_periods": 100
+    },
+    "immune": { 
+      "enabled": true, 
+      "weight": 0.2,
+      "anomaly_threshold": 2.0,
+      "adaptation_rate": 0.05
+    },
+    "microstructure": { 
+      "enabled": true, 
+      "weight": 0.2,
+      "regime_detection_window": 50,
+      "volatility_threshold": 0.02
+    },
+    "dopamine": { 
+      "enabled": true, 
+      "weight": 0.2,
+      "baseline_reward": 0.0,
+      "surprise_threshold": 0.1
+    }
+  },
+  "neural": {
+    "hidden_layers": [256, 128, 64],
+    "activation": "relu",
+    "dropout_rate": 0.2,
+    "learning_rate": 0.001,
+    "batch_size": 64
+  },
+  "risk": {
+    "max_position_size": 10,
+    "max_daily_loss": 1000.0,
+    "max_drawdown_pct": 5.0,
+    "volatility_limit": 0.05
+  },
+  "data": {
+    "timeframes": ["1m", "5m", "15m", "1h", "4h"],
+    "history_days": 10,
+    "cache_size": 10000
+  }
+}
