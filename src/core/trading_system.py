@@ -12,14 +12,24 @@ import structlog
 from .config_manager import ConfigManager
 from .tcp_bridge import TCPBridge
 from .market_data import MarketDataProcessor
+from ..agent.rl_agent import RLAgent
+from ..intelligence.subsystem_manager import SubsystemManager
+from ..intelligence.dna_subsystem import DNASubsystem
+from ..intelligence.temporal_subsystem import TemporalSubsystem
+from ..intelligence.immune_subsystem import ImmuneSubsystem
+from ..intelligence.microstructure_subsystem import MicrostructureSubsystem
+from ..intelligence.dopamine_subsystem import DopamineSubsystem
+from ..neural.network_manager import NetworkManager
+from ..neural.adaptive_network import AdaptiveNetwork
+from ..neural.specialized_networks import ReinforcementLearningNetwork
 from ..shared.types import (
     SystemConfig, LiveDataMessage, HistoricalData, TradeCompletion, 
-    TradingSignal, ActionType, State
+    TradingSignal, ActionType, State, SubsystemConfig
 )
 from ..shared.constants import (
     SUCCESS_SYSTEM_START, SUCCESS_TCP_CONNECTED, SUCCESS_DATA_PROCESSED,
     ERROR_TCP_CONNECTION, ERROR_CONFIG_LOAD, ERROR_INSUFFICIENT_DATA,
-    SYSTEM_STATES
+    SYSTEM_STATES, SUBSYSTEM_NAMES
 )
 from ..shared.utils import setup_logging, ensure_directory_exists
 
@@ -43,6 +53,11 @@ class TradingSystem:
         self.tcp_bridge: Optional[TCPBridge] = None
         self.market_processor: Optional[MarketDataProcessor] = None
         
+        # AI components
+        self.rl_agent: Optional[RLAgent] = None
+        self.subsystem_manager: Optional[SubsystemManager] = None
+        self.network_manager: Optional[NetworkManager] = None
+        
         # System state
         self.config: Optional[SystemConfig] = None
         self.is_running = False
@@ -58,10 +73,15 @@ class TradingSystem:
             "uptime_seconds": 0
         }
         
-        # Placeholder for AI components (will be implemented in later phases)
-        self.rl_agent = None
-        self.subsystem_manager = None
-        self.network_manager = None
+        # Performance tracking
+        self.performance_metrics = {
+            "total_trades": 0,
+            "profitable_trades": 0,
+            "total_pnl": 0.0,
+            "sharpe_ratio": 0.0,
+            "max_drawdown": 0.0,
+            "avg_latency_ms": 0.0
+        }
         
         logger.info("Trading system initialized", config_file=config_file)
     
@@ -87,6 +107,11 @@ class TradingSystem:
             
             # Initialize components
             if not await self._initialize_components():
+                self.state = "error"
+                return False
+            
+            # Initialize AI components
+            if not await self._initialize_ai_components():
                 self.state = "error"
                 return False
             
@@ -135,11 +160,17 @@ class TradingSystem:
             if self.tcp_bridge:
                 self.tcp_bridge.stop()
             
-            # Stop other components (placeholder for AI components)
-            # if self.rl_agent:
-            #     self.rl_agent.stop()
-            # if self.subsystem_manager:
-            #     self.subsystem_manager.stop()
+            # Stop AI components
+            if self.network_manager:
+                self.network_manager.cleanup()
+            
+            # Clean up other components
+            if self.rl_agent:
+                # RL agent cleanup (if implemented)
+                pass
+            if self.subsystem_manager:
+                # Subsystem manager cleanup (if implemented)
+                pass
             
             self.state = "stopped"
             logger.info("Trading system stopped successfully")
@@ -292,15 +323,65 @@ class TradingSystem:
             
             logger.info("Components initialized", cache_size=cache_size)
             
-            # TODO: Initialize AI components in later phases
-            # self.rl_agent = RLAgent(self.config.agent)
-            # self.subsystem_manager = SubsystemManager(self.config.subsystems)
-            # self.network_manager = NetworkManager(self.config.neural)
+            # AI components will be initialized in _initialize_ai_components
             
             return True
             
         except Exception as e:
             logger.error("Failed to initialize components", error=str(e))
+            return False
+    
+    async def _initialize_ai_components(self) -> bool:
+        """Initialize AI components (neural networks, RL agent, subsystems)."""
+        try:
+            # Initialize neural network manager
+            self.network_manager = NetworkManager(self.config.neural)
+            
+            # Create adaptive network for RL agent
+            adaptive_net = AdaptiveNetwork(self.config.neural)
+            self.network_manager.register_network("main_dqn", adaptive_net)
+            
+            # Create specialized networks
+            rl_network = ReinforcementLearningNetwork(
+                state_dim=self.config.neural.get("input_dim", 100),
+                action_dim=3,  # Hold, Buy, Sell
+                network_type="dqn"
+            )
+            self.network_manager.register_network("rl_network", rl_network)
+            
+            # Initialize RL agent
+            self.rl_agent = RLAgent(
+                config=self.config.agent,
+                network_manager=self.network_manager
+            )
+            
+            # Initialize subsystem manager
+            self.subsystem_manager = SubsystemManager(self.config.subsystems)
+            
+            # Initialize and register AI subsystems
+            dna_subsystem = DNASubsystem(self.config.subsystems.get("dna", {}))
+            temporal_subsystem = TemporalSubsystem(self.config.subsystems.get("temporal", {}))
+            immune_subsystem = ImmuneSubsystem(self.config.subsystems.get("immune", {}))
+            microstructure_subsystem = MicrostructureSubsystem(self.config.subsystems.get("microstructure", {}))
+            dopamine_subsystem = DopamineSubsystem(self.config.subsystems.get("dopamine", {}))
+            
+            # Register subsystems
+            self.subsystem_manager.register_subsystem("dna", dna_subsystem)
+            self.subsystem_manager.register_subsystem("temporal", temporal_subsystem)
+            self.subsystem_manager.register_subsystem("immune", immune_subsystem)
+            self.subsystem_manager.register_subsystem("microstructure", microstructure_subsystem)
+            self.subsystem_manager.register_subsystem("dopamine", dopamine_subsystem)
+            
+            logger.info(
+                "AI components initialized",
+                networks=len(self.network_manager.networks),
+                subsystems=len(self.subsystem_manager.subsystems)
+            )
+            
+            return True
+            
+        except Exception as e:
+            logger.error("Failed to initialize AI components", error=str(e))
             return False
     
     async def _start_tcp_bridge(self) -> bool:

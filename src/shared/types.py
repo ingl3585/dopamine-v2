@@ -169,6 +169,7 @@ class State:
     market_conditions: np.ndarray
     technical_indicators: np.ndarray
     subsystem_signals: np.ndarray
+    timestamp: int
 
 
 @dataclass

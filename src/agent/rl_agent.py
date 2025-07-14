@@ -73,15 +73,19 @@ class DQN(nn.Module):
 class RLAgent:
     """Reinforcement Learning trading agent with dopamine-inspired learning."""
     
-    def __init__(self, state_dim: int, config: dict):
+    def __init__(self, config: dict, network_manager=None):
         """Initialize RL agent.
         
         Args:
-            state_dim: Dimension of state vector
             config: Agent configuration parameters
+            network_manager: Optional network manager for neural networks
         """
-        self.state_dim = state_dim
         self.config = config
+        self.network_manager = network_manager
+        
+        # Calculate state dimension from constants
+        self.state_dim = (STATE_PRICE_DIM + STATE_VOLUME_DIM + STATE_ACCOUNT_DIM + 
+                         STATE_MARKET_DIM + STATE_TECHNICAL_DIM + STATE_SUBSYSTEM_DIM)
         
         # RL parameters
         self.learning_rate = config.get("learning_rate", DEFAULT_LEARNING_RATE)
@@ -171,6 +175,18 @@ class RLAgent:
         except Exception as e:
             logger.error("Failed to select action", error=str(e))
             return ActionType.HOLD, 0.1
+    
+    async def select_action_async(self, state: State, training: bool = True) -> Tuple[ActionType, float]:
+        """Async version of select_action for compatibility.
+        
+        Args:
+            state: Current market state
+            training: Whether in training mode
+            
+        Returns:
+            Tuple[ActionType, float]: Selected action and confidence
+        """
+        return self.select_action(state, training)
     
     def store_experience(self, state: State, action: ActionType, reward: float,
                         next_state: State, done: bool) -> None:
@@ -345,6 +361,88 @@ class RLAgent:
         }, filepath)
         
         logger.info("Model saved", filepath=filepath)
+    
+    async def store_experience(self, state: State, action: ActionType, reward: float, next_state: State, done: bool = False) -> None:
+        """Store experience in replay buffer (async version).
+        
+        Args:
+            state: Current state
+            action: Action taken
+            reward: Reward received
+            next_state: Next state
+            done: Whether episode is done
+        """
+        experience = Experience(state, action, reward, next_state, done)
+        self.memory.append(experience)
+        
+        self.steps += 1
+        self.total_reward += reward
+        
+        logger.debug(
+            "Experience stored",
+            reward=reward,
+            memory_size=len(self.memory),
+            total_reward=self.total_reward
+        )
+    
+    def should_train(self) -> bool:
+        """Check if agent should train based on memory size.
+        
+        Returns:
+            bool: True if agent should train
+        """
+        return len(self.memory) >= MIN_REPLAY_SIZE
+    
+    async def train_step(self) -> Optional[float]:
+        """Perform a single training step (async version).
+        
+        Returns:
+            Optional[float]: Training loss or None if not enough data
+        """
+        return self.train()
+    
+    async def update_with_trade_result(self, reward: float) -> None:
+        """Update agent with trade result.
+        
+        Args:
+            reward: Trade result reward
+        """
+        # Update running performance
+        self.performance_history.append(reward)
+        
+        # Update total reward
+        self.total_reward += reward
+        
+        logger.debug("Trade result processed", reward=reward, total_reward=self.total_reward)
+    
+    def reduce_exploration(self) -> None:
+        """Reduce exploration rate (for good performance)."""
+        self.exploration_rate *= 0.9
+        self.exploration_rate = max(self.exploration_rate, self.min_exploration)
+        logger.debug("Exploration reduced", exploration_rate=self.exploration_rate)
+    
+    def increase_exploration(self) -> None:
+        """Increase exploration rate (for poor performance)."""
+        self.exploration_rate *= 1.1
+        self.exploration_rate = min(self.exploration_rate, 0.5)  # Cap at 50%
+        logger.debug("Exploration increased", exploration_rate=self.exploration_rate)
+    
+    def get_performance_metrics(self) -> dict:
+        """Get performance metrics for monitoring.
+        
+        Returns:
+            dict: Performance metrics
+        """
+        return {
+            "steps": self.steps,
+            "episodes": self.episodes,
+            "total_reward": self.total_reward,
+            "memory_size": len(self.memory),
+            "exploration_rate": self.exploration_rate,
+            "avg_loss": np.mean(self.loss_history) if self.loss_history else 0.0,
+            "avg_performance": np.mean(self.performance_history) if self.performance_history else 0.0,
+            "recent_performance": np.mean(self.performance_history[-10:]) if len(self.performance_history) >= 10 else 0.0
+        }
     
     def load_model(self, filepath: str) -> None:
         """Load agent model from file.

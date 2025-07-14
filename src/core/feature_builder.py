@@ -4,6 +4,7 @@ Separated from market_data.py for clean code compliance (< 600 lines per file).
 """
 
 import numpy as np
+import time
 from typing import List, Dict, Any
 from collections import deque
 import structlog
@@ -53,7 +54,8 @@ class FeatureBuilder:
             account_metrics=account,
             market_conditions=market,
             technical_indicators=technical,
-            subsystem_signals=subsystem
+            subsystem_signals=subsystem,
+            timestamp=int(time.time() * 1000)  # Current timestamp in milliseconds
         )
     
     def _build_price_features(self, price_cache: Dict[str, deque]) -> np.ndarray:
