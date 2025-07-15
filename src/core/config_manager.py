@@ -55,8 +55,8 @@ class ConfigManager:
             
             self._config = self._dict_to_system_config(validated_config)
             
-            logger.info(
-                "Configuration loaded successfully",
+            logger.debug(
+                "Config file parsed and validated",
                 config_file=self.config_file,
                 environment=self._config.system.get("environment")
             )

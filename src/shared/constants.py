@@ -9,11 +9,11 @@ TCP_HOST = "localhost"
 TCP_PORT_DATA = 5556
 TCP_PORT_SIGNALS = 5557
 TCP_BUFFER_SIZE = 8192
-TCP_TIMEOUT = 30.0
+TCP_TIMEOUT = None  # No timeout - persistent connection
 
 # Message Protocol
 MESSAGE_HEADER_SIZE = 4
-MAX_MESSAGE_SIZE = 10000
+MAX_MESSAGE_SIZE = 100000000  # 100MB for large historical data with all timeframes
 JSON_ENCODING = "utf-8"
 
 # Timeframes
@@ -54,13 +54,13 @@ MIN_CONFIDENCE_THRESHOLD = 0.1
 MAX_CONFIDENCE_THRESHOLD = 0.9
 
 # DNA Subsystem
-DNA_DEFAULT_PATTERN_LENGTH = 10
+DNA_DEFAULT_PATTERN_LENGTH = 5  # Reduced from 10 for easier activation
 DNA_DEFAULT_MUTATION_RATE = 0.01
 DNA_MAX_PATTERNS = 1000
 
 # Temporal Subsystem
-TEMPORAL_DEFAULT_CYCLES = [5, 15, 60, 240]
-TEMPORAL_DEFAULT_LOOKBACK = 100
+TEMPORAL_DEFAULT_CYCLES = [3, 5, 10, 20]  # Reduced from [5, 15, 60, 240]
+TEMPORAL_DEFAULT_LOOKBACK = 20  # Reduced from 100 for easier activation
 TEMPORAL_MIN_CYCLE_LENGTH = 3
 
 # Immune Subsystem
@@ -169,7 +169,7 @@ MAX_VOLUME_VALUE = 1000000000
 MIN_ACCOUNT_BALANCE = 1000.0
 
 # Feature Engineering
-FEATURE_WINDOWS = [5, 10, 20, 50]
+FEATURE_WINDOWS = [5, 10, 20]  # Reduced from 50 to 20 for live trading
 FEATURE_TYPES = ["returns", "volatility", "momentum", "mean_reversion"]
 NORMALIZATION_METHODS = ["z_score", "min_max", "robust"]
 

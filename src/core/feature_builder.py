@@ -282,8 +282,18 @@ class FeatureBuilder:
         """Check if we have sufficient data to build state."""
         min_required = max(FEATURE_WINDOWS) + 1
         
+        insufficient_timeframes = []
         for tf in TIMEFRAMES:
-            if len(price_cache[tf]) < min_required:
-                return False
+            cache_size = len(price_cache[tf])
+            if cache_size < min_required:
+                insufficient_timeframes.append(f"{tf}:{cache_size}/{min_required}")
+        
+        if insufficient_timeframes:
+            logger.debug(
+                "Insufficient data for state building",
+                missing_data=insufficient_timeframes,
+                min_required=min_required
+            )
+            return False
         
         return True

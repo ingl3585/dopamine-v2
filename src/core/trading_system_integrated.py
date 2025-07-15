@@ -29,35 +29,80 @@ class IntegratedTradingSystem(TradingSystem):
     async def _process_with_ai(self, data: LiveDataMessage) -> None:
         """Process live data with AI components."""
         if self.ai_processing:
+            logger.debug("AI processing already in progress, skipping")
             return  # Skip if already processing
         
         # Check cooldown
         current_time = asyncio.get_event_loop().time()
         if current_time - self.last_ai_decision_time < self.ai_decision_cooldown:
+            logger.debug(
+                "AI decision cooldown active",
+                time_remaining=self.ai_decision_cooldown - (current_time - self.last_ai_decision_time)
+            )
             return
         
+        logger.info("Starting AI processing pipeline")
         self.ai_processing = True
         self.last_ai_decision_time = current_time
         
         try:
             # Get current market state
+            logger.debug("Building current market state")
+            
+            # Debug: Check cache sizes before building state
+            cache_info = {}
+            for tf in ['1m', '5m', '15m', '1h', '4h']:
+                cache_info[tf] = len(self.market_processor._price_cache[tf])
+            
+            total_bars = sum(cache_info.values())
+            logger.debug(f"Building state from {total_bars} cached bars")
+            
             current_state = self.market_processor.get_current_state()
             if not current_state:
+                logger.warning("No current market state available for AI processing - insufficient data in cache")
                 return
             
+            logger.info(f"Market state built - {len(current_state.prices)} price features, {len(current_state.volumes)} volume features")
+            
             # Process with AI subsystems
+            logger.debug("Processing state with AI subsystems")
             subsystem_signals = await self.subsystem_manager.process_state(current_state)
             
+            logger.info(
+                "AI subsystems processed",
+                signals_generated=len(subsystem_signals),
+                active_subsystems=list(subsystem_signals.keys())
+            )
+            
             # Aggregate subsystem signals
+            logger.debug("Aggregating subsystem signals")
             consensus_signal = self.subsystem_manager.aggregate_signals(subsystem_signals)
+            
+            if consensus_signal:
+                logger.info(
+                    "Consensus signal generated",
+                    action=consensus_signal.action.name,
+                    confidence=consensus_signal.confidence,
+                    strength=consensus_signal.strength
+                )
+            else:
+                logger.info("No consensus signal generated from subsystems")
             
             # Use RL agent for final decision
             if consensus_signal:
+                logger.debug("Enhancing state with subsystem signals")
                 # Enhance state with subsystem signals
                 enhanced_state = self._enhance_state_with_signals(current_state, subsystem_signals)
                 
                 # Get RL agent decision
+                logger.debug("Getting RL agent decision")
                 action, confidence = self.rl_agent.select_action(enhanced_state)
+                
+                logger.info(
+                    "RL agent decision",
+                    action=action.name,
+                    confidence=confidence
+                )
                 
                 # Apply dopamine subsystem learning enhancement
                 if "dopamine" in subsystem_signals:
@@ -66,20 +111,37 @@ class IntegratedTradingSystem(TradingSystem):
                     confidence *= learning_enhancement
                 
                 # Send trading signal if confidence is high enough
-                min_confidence = self.config.agent.get("min_confidence", 0.6) if hasattr(self.config, 'agent') else 0.6
+                min_confidence = self.config.agent.get("min_confidence", 0.6)
+                
+                action_name = action.name if hasattr(action, 'name') else str(action)
+                will_trade = confidence >= min_confidence and action != ActionType.HOLD
+                logger.info(f"Trading decision: {action_name} (confidence: {confidence:.2f}, min: {min_confidence}) -> {'TRADE' if will_trade else 'NO TRADE'}")
+                
                 if confidence >= min_confidence and action != ActionType.HOLD:
+                    position_size = self._calculate_position_size(confidence)
+                    
+                    logger.info(f"Sending {action.name} signal - confidence: {confidence:.2f}, size: {position_size}")
+                    
                     success = self.send_trading_signal(
                         action=action,
                         confidence=confidence,
-                        position_size=self._calculate_position_size(confidence)
+                        position_size=position_size
                     )
                     
                     if success:
+                        logger.info("Trading signal sent successfully")
                         # Update performance metrics
                         self.performance_metrics["total_trades"] += 1
                         
                         # Train RL agent with experience
                         await self._train_rl_agent(enhanced_state, action, consensus_signal)
+                    else:
+                        logger.warning("Failed to send trading signal")
+                else:
+                    logger.info(
+                        "No trading signal sent",
+                        reason="confidence_too_low" if confidence < min_confidence else "action_is_hold"
+                    )
                 
                 # Update subsystem performance
                 self._update_subsystem_performance(subsystem_signals, consensus_signal)
@@ -92,7 +154,14 @@ class IntegratedTradingSystem(TradingSystem):
                 )
         
         except Exception as e:
-            logger.error("AI processing failed", error=str(e))
+            logger.error(
+                "AI processing failed", 
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            # Log full traceback for debugging
+            import traceback
+            logger.error("AI processing traceback", traceback=traceback.format_exc())
             self.stats["errors"] += 1
         
         finally:
@@ -123,14 +192,14 @@ class IntegratedTradingSystem(TradingSystem):
         # Truncate if too long
         enhanced_subsystem_signals = enhanced_subsystem_signals[:target_dim]
         
-        # Create enhanced state
+        # Create enhanced state with numpy array for subsystem_signals
         enhanced_state = State(
             prices=state.prices,
             volumes=state.volumes,
             account_metrics=state.account_metrics,
             market_conditions=state.market_conditions,
             technical_indicators=state.technical_indicators,
-            subsystem_signals=enhanced_subsystem_signals,
+            subsystem_signals=np.array(enhanced_subsystem_signals),  # Convert to numpy array
             timestamp=state.timestamp
         )
         
@@ -138,7 +207,7 @@ class IntegratedTradingSystem(TradingSystem):
     
     def _calculate_position_size(self, confidence: float) -> int:
         """Calculate position size based on confidence."""
-        agent_config = self.config.agent if hasattr(self.config, 'agent') else {}
+        agent_config = self.config.agent
         base_size = agent_config.get("base_position_size", 1)
         max_size = agent_config.get("max_position_size", 5)
         
@@ -188,16 +257,20 @@ class IntegratedTradingSystem(TradingSystem):
     async def _on_live_data(self, data: LiveDataMessage) -> None:
         """Handle live market data with AI processing."""
         try:
-            logger.debug(
-                "Live data received",
-                current_price=data.market_conditions.current_price,
-                account_balance=data.account_info.account_balance,
-                position_size=data.account_info.total_position_size
-            )
+            logger.info(f"Processing live market data - Price: ${data.market_conditions.current_price}, Balance: ${data.account_info.account_balance:.2f}, Position: {data.account_info.total_position_size}")
             
-            # Process with AI components if available
+            # Process with AI components if available  
+            logger.debug(f"AI components ready: RL={bool(self.rl_agent)}, Subsystems={bool(self.subsystem_manager)}, Historical={self.has_historical_data}")
+            
             if self.rl_agent and self.subsystem_manager and self.has_historical_data:
+                logger.info("Processing live data with AI components")
                 await self._process_with_ai(data)
+            elif not self.has_historical_data:
+                logger.info("Waiting for historical data before AI processing")
+            elif not self.rl_agent:
+                logger.warning("RL agent not initialized for AI processing")
+            elif not self.subsystem_manager:
+                logger.warning("Subsystem manager not initialized for AI processing")
         
         except Exception as e:
             logger.error("Failed to process live data", error=str(e))
@@ -212,7 +285,7 @@ class IntegratedTradingSystem(TradingSystem):
                          len(data.bars_15m) + len(data.bars_1h) + len(data.bars_4h))
             
             logger.info(
-                "Historical data received",
+                "AI processing historical data",
                 total_bars=total_bars,
                 bars_1m=len(data.bars_1m),
                 bars_5m=len(data.bars_5m),
@@ -223,7 +296,10 @@ class IntegratedTradingSystem(TradingSystem):
             
             # Initialize AI models with historical data
             if self.rl_agent:
+                logger.info("Initializing AI models with historical data")
                 await self._initialize_ai_with_history(data)
+            else:
+                logger.warning("RL agent not available for historical data initialization")
         
         except Exception as e:
             logger.error("Failed to process historical data", error=str(e))
@@ -254,16 +330,36 @@ class IntegratedTradingSystem(TradingSystem):
             
             # Pre-train AI components with historical states
             if states:
-                logger.info("Initializing AI with historical data", states=len(states))
+                logger.info(
+                    "Initializing AI subsystems with historical states",
+                    total_states=len(states),
+                    initialization_states=min(50, len(states))
+                )
                 
                 # Initialize subsystems with historical data
+                successful_inits = 0
                 for i, state in enumerate(states[-50:]):  # Last 50 states
                     try:
                         await self.subsystem_manager.process_state(state)
+                        successful_inits += 1
+                        if (i + 1) % 10 == 0:  # Log progress every 10 states
+                            logger.debug(
+                                "AI initialization progress",
+                                completed=i + 1,
+                                total=min(50, len(states)),
+                                success_rate=f"{successful_inits/(i+1)*100:.1f}%"
+                            )
                     except Exception as e:
                         logger.debug("Subsystem initialization step failed", step=i, error=str(e))
                 
-                logger.info("AI initialization completed")
+                logger.info(
+                    "AI initialization completed",
+                    successful_states=successful_inits,
+                    total_processed=min(50, len(states)),
+                    ai_ready=True
+                )
+            else:
+                logger.warning("No historical states available for AI initialization")
         
         except Exception as e:
             logger.error("AI initialization failed", error=str(e))
@@ -344,7 +440,7 @@ class IntegratedTradingSystem(TradingSystem):
     async def optimize_performance(self) -> None:
         """Optimize system performance."""
         try:
-            logger.info("Starting performance optimization")
+            logger.debug("Starting performance optimization")
             
             # Optimize neural networks
             if self.network_manager:
@@ -374,7 +470,7 @@ class IntegratedTradingSystem(TradingSystem):
                     elif success_rate < 0.4:
                         self.rl_agent.increase_exploration()
             
-            logger.info("Performance optimization completed")
+            logger.debug("Network and subsystem optimization completed")
         
         except Exception as e:
             logger.error("Performance optimization failed", error=str(e))

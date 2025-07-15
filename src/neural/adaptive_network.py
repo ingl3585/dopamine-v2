@@ -419,12 +419,7 @@ class AdaptiveNetwork(nn.Module):
         self.performance_history = deque(maxlen=1000)
         self.adaptation_results = deque(maxlen=50)
         
-        logger.info(
-            "Adaptive network initialized",
-            input_dim=self.input_dim,
-            output_dim=self.output_dim,
-            initial_layers=len(self.hidden_layers)
-        )
+        logger.info(f"Adaptive network initialized - input: {self.input_dim}, output: {self.output_dim}, layers: {len(self.hidden_layers)}")
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through adaptive network."""

@@ -285,11 +285,15 @@ class DopamineSubsystem:
     
     def _update_dopamine_level(self, prediction_error: float, surprise_magnitude: float):
         """Update dopamine level based on prediction error and surprise."""
+        # Clamp prediction error to prevent extreme values
+        prediction_error = max(-10.0, min(10.0, prediction_error))
+        surprise_magnitude = max(0.0, min(5.0, surprise_magnitude))
+        
         # Dopamine responds to positive prediction errors
-        dopamine_signal = max(0, prediction_error) * 2.0
+        dopamine_signal = max(0, prediction_error) * 0.1  # Reduced from 2.0 to 0.1
         
         # Add surprise bonus
-        surprise_bonus = surprise_magnitude * 0.5
+        surprise_bonus = surprise_magnitude * 0.05  # Reduced from 0.5 to 0.05
         dopamine_signal += surprise_bonus
         
         # Update current level with decay
@@ -312,7 +316,13 @@ class DopamineSubsystem:
         """Update learning rate and exploration based on dopamine level."""
         # Higher dopamine = higher learning rate
         dopamine_norm = self.current_dopamine_level - self.baseline_dopamine
-        self.learning_rate_multiplier = 1.0 + max(0, dopamine_norm) * 0.5
+        # Cap the multiplier to prevent extreme values
+        raw_multiplier = 1.0 + max(0, dopamine_norm) * 0.5
+        self.learning_rate_multiplier = min(5.0, max(0.1, raw_multiplier))  # Cap between 0.1 and 5.0
+        
+        # Log extreme dopamine levels for debugging
+        if abs(dopamine_norm) > 5.0:
+            logger.warning(f"High dopamine level: {self.current_dopamine_level:.2f} (norm: {dopamine_norm:.2f}, multiplier: {self.learning_rate_multiplier:.2f})")
         
         # Exploration bonus based on dopamine variability
         if len(self.dopamine_history) >= 10:

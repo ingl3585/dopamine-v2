@@ -61,6 +61,10 @@ class TCPBridge:
         # Connection status
         self._ninja_connected = False
         
+        # Error rate limiting
+        self._last_warning_time = 0
+        self._warning_interval = 5.0  # Minimum 5 seconds between warnings
+        
     def set_data_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Set callback function for incoming market data.
         
@@ -87,8 +91,8 @@ class TCPBridge:
         self._thread = threading.Thread(target=self._run_event_loop, daemon=True)
         self._thread.start()
         
-        logger.info(
-            "TCP bridge started",
+        logger.debug(
+            "TCP bridge initialization complete",
             data_port=self.data_port,
             signals_port=self.signals_port
         )
@@ -120,7 +124,11 @@ class TCPBridge:
             bool: True if signal was sent successfully
         """
         if not self._ninja_signals_writer or self._ninja_signals_writer.is_closing():
-            logger.warning("No signals connection to NinjaTrader")
+            logger.warning(
+                "No active signals connection to NinjaTrader",
+                has_writer=bool(self._ninja_signals_writer),
+                writer_closing=self._ninja_signals_writer.is_closing() if self._ninja_signals_writer else "no_writer"
+            )
             return False
         
         try:
@@ -143,12 +151,30 @@ class TCPBridge:
                     self._send_message(self._ninja_signals_writer, json_str),
                     self._loop
                 )
-                return future.result(timeout=1.0)
+                result = future.result(timeout=5.0)  # Increased timeout to 5 seconds
+                
+                if result:
+                    logger.info(
+                        "Trading signal sent to NinjaTrader",
+                        action=signal.action,
+                        confidence=signal.confidence,
+                        position_size=signal.position_size
+                    )
+                
+                return result
             
+            logger.warning("Event loop not available for signal sending")
             return False
             
         except Exception as e:
-            logger.error("Failed to send trading signal", error=str(e))
+            logger.error(
+                "Failed to send trading signal", 
+                error=str(e),
+                error_type=type(e).__name__,
+                has_signals_writer=bool(self._ninja_signals_writer),
+                signals_writer_closing=self._ninja_signals_writer.is_closing() if self._ninja_signals_writer else "no_writer",
+                event_loop_available=bool(self._loop and not self._loop.is_closed())
+            )
             return False
     
     def is_connected(self) -> bool:
@@ -169,8 +195,10 @@ class TCPBridge:
             # Start servers
             self._loop.run_until_complete(self._start_servers())
             
+            logger.info("TCP bridge event loop starting")
             # Run until stopped
             self._loop.run_forever()
+            logger.info("TCP bridge event loop ended")
             
         except Exception as e:
             logger.error("Event loop error", error=str(e))
@@ -195,7 +223,7 @@ class TCPBridge:
                 self.signals_port
             )
             
-            logger.info(
+            logger.debug(
                 "TCP servers started",
                 data_address=f"{self.host}:{self.data_port}",
                 signals_address=f"{self.host}:{self.signals_port}"
@@ -219,45 +247,181 @@ class TCPBridge:
             self._connection_callback(True)
         
         try:
+            # Send acknowledgment to confirm data connection is ready
+            ack_msg = '{"type":"connection_ack","status":"ready","timestamp":' + str(int(asyncio.get_event_loop().time())) + '}'
+            await self._send_message(writer, ack_msg)
+            logger.debug("Sent connection acknowledgment to NinjaTrader data connection")
+            
+            # Log connection details
+            logger.debug(
+                "Data connection details",
+                client_address=client_addr,
+                socket_info=writer.get_extra_info('socket')
+            )
+            
+            # Track message count for debugging
+            message_count = 0
+            
             while self._running and not reader.at_eof():
-                # Read message header (4 bytes for length)
+                # Read message header (4 bytes for length) - no timeout, just wait
                 header_data = await reader.read(MESSAGE_HEADER_SIZE)
+                
                 if len(header_data) != MESSAGE_HEADER_SIZE:
+                    if len(header_data) == 0:
+                        logger.info("Data connection closed by NinjaTrader (clean disconnect)")
+                    else:
+                        logger.warning("Incomplete header received", bytes_received=len(header_data))
                     break
                 
                 # Extract message length
                 message_length = struct.unpack('<I', header_data)[0]
                 
+                logger.debug(
+                    "Message header received",
+                    length=message_length,
+                    length_mb=round(message_length / 1024 / 1024, 2)
+                )
+                
                 # Validate message length
                 if message_length <= 0 or message_length > MAX_MESSAGE_SIZE:
-                    logger.warning(
-                        "Invalid message length",
+                    logger.error(
+                        "Invalid message length from NinjaTrader",
                         length=message_length,
-                        max_length=MAX_MESSAGE_SIZE
+                        max_length=MAX_MESSAGE_SIZE,
+                        header_bytes=header_data.hex() if header_data else "none"
                     )
-                    continue
+                    break  # Invalid message, close connection
                 
-                # Read message data
-                message_data = await reader.read(message_length)
+                # Read message data - handle large historical data properly
+                logger.debug("Starting to read message data", total_bytes=message_length)
+                
+                message_data = b''
+                bytes_remaining = message_length
+                chunk_count = 0
+                
+                while bytes_remaining > 0:
+                    # Read available data, up to remaining bytes
+                    chunk = await reader.read(bytes_remaining)
+                    if not chunk:
+                        logger.error(
+                            "Connection closed while reading message data",
+                            bytes_read=len(message_data),
+                            bytes_remaining=bytes_remaining,
+                            chunks_read=chunk_count
+                        )
+                        break
+                    
+                    message_data += chunk
+                    bytes_remaining -= len(chunk)
+                    chunk_count += 1
+                    
+                    # Log progress for large messages
+                    if message_length > 1000000 and chunk_count % 50 == 0:
+                        progress = ((message_length - bytes_remaining) / message_length) * 100
+                        logger.debug(
+                            "Reading large message progress",
+                            progress_pct=round(progress, 1),
+                            bytes_read=len(message_data),
+                            chunks=chunk_count
+                        )
+                
+                logger.debug(
+                    "Message data read complete",
+                    total_bytes=len(message_data),
+                    expected_bytes=message_length,
+                    chunks_read=chunk_count
+                )
                 if len(message_data) != message_length:
+                    logger.error(
+                        "Incomplete message data received",
+                        expected=message_length,
+                        received=len(message_data),
+                        missing_bytes=message_length - len(message_data)
+                    )
                     break
+                
+                message_count += 1
+                
+                # Log all messages during debugging
+                logger.info(
+                    "Message received from NinjaTrader",
+                    message_number=message_count,
+                    size_bytes=message_length,
+                    size_mb=round(message_length / 1024 / 1024, 2) if message_length > 1024 else 0
+                )
                 
                 # Process message
                 try:
                     json_str = message_data.decode(JSON_ENCODING)
                     message_dict = parse_json_message(json_str)
                     
-                    if message_dict and self._data_callback:
-                        self._data_callback(message_dict)
+                    if message_dict:
+                        message_type = message_dict.get("type")
+                        
+                        # Log different message types appropriately
+                        if message_type == "historical_data":
+                            total_bars = 0
+                            for tf in ["1m", "5m", "15m", "1h", "4h"]:
+                                bars_key = f"bars_{tf}"
+                                if bars_key in message_dict:
+                                    total_bars += len(message_dict[bars_key])
+                            
+                            logger.info(
+                                "Received historical data from NinjaTrader",
+                                total_bars=total_bars,
+                                size_bytes=len(message_data)
+                            )
+                        elif message_type == "live_data":
+                            logger.debug(
+                                "Received live data from NinjaTrader",
+                                current_price=message_dict.get("current_price"),
+                                timestamp=message_dict.get("timestamp")
+                            )
+                        elif message_type == "trade_completion":
+                            logger.info(
+                                "Received trade completion from NinjaTrader",
+                                pnl=message_dict.get("pnl"),
+                                exit_reason=message_dict.get("exit_reason")
+                            )
+                        else:
+                            logger.debug(
+                                "Received message from NinjaTrader",
+                                type=message_type,
+                                size_bytes=len(message_data)
+                            )
+                        
+                        if self._data_callback:
+                            logger.debug("Calling data callback with message", type=message_type)
+                            self._data_callback(message_dict)
+                            logger.debug("Data callback completed successfully")
                         
                 except Exception as e:
-                    logger.error("Failed to process data message", error=str(e))
+                    logger.error(
+                        "Failed to process data message", 
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        message_type=message_dict.get("type") if 'message_dict' in locals() else "parse_failed",
+                        message_size=len(message_data)
+                    )
+                    # Print first 200 chars of problematic message for debugging
+                    try:
+                        sample = message_data[:200].decode('utf-8', errors='replace')
+                        logger.debug("Message sample", sample=sample)
+                    except:
+                        logger.debug("Could not decode message sample")
                     
+        except ConnectionResetError:
+            logger.info("Data connection reset by NinjaTrader")
         except Exception as e:
-            logger.error("Data connection error", error=str(e))
+            logger.warning("Data connection error", error=str(e), error_type=type(e).__name__)
         finally:
-            writer.close()
-            await writer.wait_closed()
+            try:
+                if not writer.is_closing():
+                    writer.close()
+                    await writer.wait_closed()
+            except:
+                pass  # Ignore close errors
+                
             self._ninja_data_writer = None
             self._ninja_connected = False
             
@@ -276,15 +440,29 @@ class TCPBridge:
         self._ninja_signals_writer = writer
         
         try:
+            # Signals connection is output-only, no need for keepalive messages
+            logger.debug("Signals connection ready for outbound trading signals")
+            
             # Keep connection alive - NinjaTrader will close when done
             while self._running and not reader.at_eof():
-                await asyncio.sleep(1)
+                # Check if writer is still connected
+                if writer.is_closing():
+                    logger.warning("Signals writer is closing")
+                    break
+                    
+                await asyncio.sleep(5)  # Check every 5 seconds
                 
+        except ConnectionResetError:
+            logger.info("Signals connection reset by NinjaTrader")
         except Exception as e:
             logger.error("Signals connection error", error=str(e))
         finally:
-            writer.close()
-            await writer.wait_closed()
+            try:
+                if not writer.is_closing():
+                    writer.close()
+                    await writer.wait_closed()
+            except:
+                pass  # Ignore close errors
             self._ninja_signals_writer = None
             logger.info("Signals connection closed", client=client_addr)
     

@@ -9,6 +9,7 @@ import signal
 import sys
 from pathlib import Path
 import structlog
+import numpy
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -42,30 +43,35 @@ class DopamineTrader:
             int: Exit code (0 for success, 1 for error)
         """
         try:
-            # Setup initial logging
+            # Setup initial logging first
             setup_logging("INFO", LOG_DIR)
+            
+            logger = structlog.get_logger(__name__)
+            logger.info("Initializing Dopamine Trading System")
             
             # Ensure required directories exist
             ensure_directory_exists(LOG_DIR)
             ensure_directory_exists(DATA_DIR)
             ensure_directory_exists(MODELS_DIR)
             
-            logger.info("Starting Dopamine Trading System")
-            logger.info("=================================")
+            logger.debug("Loading system configuration")
+            logger.debug("=================================")
             
             # Initialize trading system
             self.trading_system = IntegratedTradingSystem(self.config_file)
+            logger.debug("Initializing AI components and neural networks")
             
             # Setup signal handlers
             self._setup_signal_handlers()
             
             # Start the system
             if not await self.trading_system.start():
-                logger.error("Failed to start trading system")
+                logger.error("System startup failed")
                 return ERROR_CONFIG_LOAD
             
-            logger.info("Trading system started successfully")
-            logger.info("Press Ctrl+C to stop the system")
+            logger.info("Dopamine Trading System is now online")
+            logger.info("Monitoring markets and waiting for NinjaTrader connection")
+            logger.info("Press Ctrl+C to shutdown")
             
             # Run main loop
             await self._run_main_loop()
@@ -76,7 +82,12 @@ class DopamineTrader:
             logger.info("Received keyboard interrupt")
             return 0
         except Exception as e:
-            logger.error("Fatal error in main application", error=str(e))
+            logger = structlog.get_logger(__name__)
+            logger.error(f"Fatal error in main application: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error("Full traceback:")
+            logger.error(traceback.format_exc())
             return 1
         finally:
             await self._cleanup()
@@ -134,8 +145,8 @@ class DopamineTrader:
             # Get comprehensive system status
             status = self.trading_system.get_ai_status()
             
-            # Log key metrics
-            logger.info(
+            # Log key metrics at debug level to reduce noise
+            logger.debug(
                 "System health check",
                 state=status.get("state"),
                 uptime=status.get("statistics", {}).get("uptime_seconds", 0),
@@ -177,7 +188,7 @@ class DopamineTrader:
             if not self.trading_system:
                 return
             
-            logger.info("Starting performance optimization cycle")
+            logger.debug("Starting performance optimization cycle")
             
             # Run system optimization
             await self.trading_system.optimize_performance()
@@ -186,8 +197,8 @@ class DopamineTrader:
             status = self.trading_system.get_ai_status()
             ai_status = status.get("ai", {})
             
-            logger.info(
-                "Performance optimization completed",
+            logger.debug(
+                "Performance optimization cycle completed",
                 networks=len(ai_status.get("networks", {})),
                 subsystems=len(ai_status.get("subsystems", {}).get("enabled_subsystems", [])),
                 total_trades=ai_status.get("performance_metrics", {}).get("total_trades", 0),

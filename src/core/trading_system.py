@@ -83,7 +83,7 @@ class TradingSystem:
             "avg_latency_ms": 0.0
         }
         
-        logger.info("Trading system initialized", config_file=config_file)
+        logger.debug("Trading system initialized", config_file=config_file)
     
     async def start(self) -> bool:
         """Start the trading system.
@@ -93,12 +93,11 @@ class TradingSystem:
         """
         try:
             start_time = asyncio.get_event_loop().time()
-            
-            logger.info("Starting Dopamine Trading System")
             self.state = "loading"
             
             # Load configuration
             if not await self._load_configuration():
+                logger.error("Failed to load system configuration")
                 self.state = "error"
                 return False
             
@@ -107,17 +106,22 @@ class TradingSystem:
             
             # Initialize components
             if not await self._initialize_components():
+                logger.error("Failed to initialize core components")
                 self.state = "error"
                 return False
             
+            logger.info("Loading reinforcement learning agent")
             # Initialize AI components
             if not await self._initialize_ai_components():
+                logger.error("Failed to initialize AI subsystems")
                 self.state = "error"
                 return False
             
+            logger.info("Establishing NinjaTrader connection")
             # Start TCP bridge
             self.state = "connecting"
             if not await self._start_tcp_bridge():
+                logger.error("Failed to establish NinjaTrader connection")
                 self.state = "error"
                 return False
             
@@ -283,7 +287,7 @@ class TradingSystem:
             self.config_manager = ConfigManager(self.config_file)
             self.config = self.config_manager.load_config()
             
-            logger.info(
+            logger.debug(
                 "Configuration loaded",
                 environment=self.config.system.get("environment"),
                 subsystems_enabled=sum(1 for s in self.config.subsystems.values() if s.enabled)
@@ -304,7 +308,7 @@ class TradingSystem:
             ensure_directory_exists(log_dir)
             setup_logging(log_level, log_dir)
             
-            logger.info("Logging configured", log_level=log_level, log_dir=log_dir)
+            logger.info(f"Logging configured - level: {log_level}, dir: {log_dir}")
             
         except Exception as e:
             logger.error("Failed to setup logging", error=str(e))
@@ -321,7 +325,7 @@ class TradingSystem:
             self.market_processor.add_historical_callback(self._on_historical_data)
             self.market_processor.add_trade_callback(self._on_trade_completion)
             
-            logger.info("Components initialized", cache_size=cache_size)
+            logger.debug("Components initialized", cache_size=cache_size)
             
             # AI components will be initialized in _initialize_ai_components
             
@@ -334,6 +338,8 @@ class TradingSystem:
     async def _initialize_ai_components(self) -> bool:
         """Initialize AI components (neural networks, RL agent, subsystems)."""
         try:
+            logger.info("Initializing neural networks")
+            
             # Initialize neural network manager
             self.network_manager = NetworkManager(self.config.neural)
             
@@ -349,21 +355,29 @@ class TradingSystem:
             )
             self.network_manager.register_network("rl_network", rl_network)
             
+            logger.info("Configuring deep Q-learning agent")
             # Initialize RL agent
             self.rl_agent = RLAgent(
                 config=self.config.agent,
                 network_manager=self.network_manager
             )
             
+            logger.info("Loading AI trading subsystems")
             # Initialize subsystem manager
             self.subsystem_manager = SubsystemManager(self.config.subsystems)
             
             # Initialize and register AI subsystems
-            dna_subsystem = DNASubsystem(self.config.subsystems.get("dna", {}))
-            temporal_subsystem = TemporalSubsystem(self.config.subsystems.get("temporal", {}))
-            immune_subsystem = ImmuneSubsystem(self.config.subsystems.get("immune", {}))
-            microstructure_subsystem = MicrostructureSubsystem(self.config.subsystems.get("microstructure", {}))
-            dopamine_subsystem = DopamineSubsystem(self.config.subsystems.get("dopamine", {}))
+            dna_config = self.config.subsystems["dna"].parameters if "dna" in self.config.subsystems else {}
+            temporal_config = self.config.subsystems["temporal"].parameters if "temporal" in self.config.subsystems else {}
+            immune_config = self.config.subsystems["immune"].parameters if "immune" in self.config.subsystems else {}
+            microstructure_config = self.config.subsystems["microstructure"].parameters if "microstructure" in self.config.subsystems else {}
+            dopamine_config = self.config.subsystems["dopamine"].parameters if "dopamine" in self.config.subsystems else {}
+            
+            dna_subsystem = DNASubsystem(dna_config)
+            temporal_subsystem = TemporalSubsystem(temporal_config)
+            immune_subsystem = ImmuneSubsystem(immune_config)
+            microstructure_subsystem = MicrostructureSubsystem(microstructure_config)
+            dopamine_subsystem = DopamineSubsystem(dopamine_config)
             
             # Register subsystems
             self.subsystem_manager.register_subsystem("dna", dna_subsystem)
@@ -371,6 +385,8 @@ class TradingSystem:
             self.subsystem_manager.register_subsystem("immune", immune_subsystem)
             self.subsystem_manager.register_subsystem("microstructure", microstructure_subsystem)
             self.subsystem_manager.register_subsystem("dopamine", dopamine_subsystem)
+            
+            logger.info("AI subsystems ready: DNA, Temporal, Immune, Microstructure, Dopamine")
             
             logger.info(
                 "AI components initialized",
@@ -381,7 +397,9 @@ class TradingSystem:
             return True
             
         except Exception as e:
-            logger.error("Failed to initialize AI components", error=str(e))
+            logger.error(f"AI system initialization failed: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     async def _start_tcp_bridge(self) -> bool:
@@ -404,7 +422,16 @@ class TradingSystem:
             # Wait a moment for startup
             await asyncio.sleep(1.0)
             
-            logger.info("TCP bridge started")
+            logger.info("TCP bridge started - waiting for NinjaTrader connection")
+            
+            # Wait a bit longer to see if NinjaTrader connects
+            await asyncio.sleep(2.0)
+            
+            if self.ninja_connected:
+                logger.info("NinjaTrader connected during startup")
+            else:
+                logger.info("Still waiting for NinjaTrader connection - ensure ResearchStrategy is running")
+            
             return True
             
         except Exception as e:
@@ -426,7 +453,7 @@ class TradingSystem:
             status = self.get_status()
             
             logger.debug(
-                "Health check",
+                "Periodic health check",
                 state=status["state"],
                 uptime=status["statistics"]["uptime_seconds"],
                 messages_processed=status["statistics"]["messages_processed"],
@@ -463,9 +490,19 @@ class TradingSystem:
         self.ninja_connected = connected
         
         if connected:
-            logger.info("NinjaTrader connected")
+            logger.info("NinjaTrader connected successfully")
+            # Log current system status when connection is established
+            logger.info(
+                "System ready for trading",
+                has_historical_data=self.has_historical_data,
+                ai_components_ready=bool(self.rl_agent and self.subsystem_manager),
+                tcp_connected=self.tcp_bridge.is_connected() if self.tcp_bridge else False
+            )
         else:
-            logger.warning("NinjaTrader disconnected")
+            logger.warning("NinjaTrader disconnected - waiting for reconnection")
+            # Reset historical data flag to trigger resend when reconnected
+            if self.has_historical_data:
+                logger.info("Will request historical data on next connection")
     
     def _on_live_data(self, data: LiveDataMessage) -> None:
         """Handle live market data."""

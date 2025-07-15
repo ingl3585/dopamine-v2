@@ -3,9 +3,11 @@ Market data processor for the Dopamine Trading System.
 Handles validation, normalization, and feature extraction from incoming market data.
 """
 
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Union, Awaitable
 from collections import deque
 import numpy as np
+import asyncio
+import inspect
 import structlog
 
 from ..shared.types import (
@@ -55,10 +57,10 @@ class MarketDataProcessor:
         self._features_cache = {}
         self._last_feature_update = 0
         
-        # Callbacks
-        self._data_callbacks: List[Callable[[LiveDataMessage], None]] = []
-        self._historical_callbacks: List[Callable[[HistoricalData], None]] = []
-        self._trade_callbacks: List[Callable[[TradeCompletion], None]] = []
+        # Callbacks (can be sync or async)
+        self._data_callbacks: List[Union[Callable[[LiveDataMessage], None], Callable[[LiveDataMessage], Awaitable[None]]]] = []
+        self._historical_callbacks: List[Union[Callable[[HistoricalData], None], Callable[[HistoricalData], Awaitable[None]]]] = []
+        self._trade_callbacks: List[Union[Callable[[TradeCompletion], None], Callable[[TradeCompletion], Awaitable[None]]]] = []
         
         # Statistics
         self._stats = {
@@ -67,7 +69,7 @@ class MarketDataProcessor:
             "feature_updates": 0
         }
         
-        logger.info("Market data processor initialized", cache_size=cache_size)
+        logger.debug("Market data processor initialized", cache_size=cache_size)
     
     def add_data_callback(self, callback: Callable[[LiveDataMessage], None]) -> None:
         """Add callback for live data updates."""
@@ -80,6 +82,23 @@ class MarketDataProcessor:
     def add_trade_callback(self, callback: Callable[[TradeCompletion], None]) -> None:
         """Add callback for trade completion updates."""
         self._trade_callbacks.append(callback)
+    
+    async def _call_callbacks(self, callbacks: List, data: Any) -> None:
+        """Call a list of callbacks, handling both sync and async functions."""
+        for callback in callbacks:
+            try:
+                if inspect.iscoroutinefunction(callback):
+                    # Async callback - await it
+                    await callback(data)
+                else:
+                    # Sync callback - call directly
+                    callback(data)
+            except Exception as e:
+                logger.error(
+                    "Callback failed",
+                    callback_name=getattr(callback, '__name__', 'unknown'),
+                    error=str(e)
+                )
     
     def process_message(self, message_data: Dict[str, Any]) -> bool:
         """Process incoming message from TCP bridge.
@@ -99,6 +118,8 @@ class MarketDataProcessor:
                 return self._process_historical_data(message_data)
             elif message_type == "trade_completion":
                 return self._process_trade_completion(message_data)
+            elif message_type == "test_connection":
+                return self._process_test_message(message_data)
             else:
                 logger.warning("Unknown message type", message_type=message_type)
                 return False
@@ -119,10 +140,28 @@ class MarketDataProcessor:
             if not self._feature_builder.has_sufficient_data(self._price_cache):
                 return None
             
-            return self._feature_builder.build_state(
+            state = self._feature_builder.build_state(
                 self._price_cache, self._volume_cache,
                 self._account_history, self._market_history
             )
+            
+            logger.debug(
+                "Built market state",
+                price_features=len(state.prices),
+                volume_features=len(state.volumes),
+                account_features=len(state.account_metrics),
+                technical_features=len(state.technical_indicators)
+            )
+            
+            # Add cache status debugging
+            cache_status = {tf: len(self._price_cache[tf]) for tf in TIMEFRAMES}
+            logger.debug(
+                "Market state cache status",
+                cache_sizes=cache_status,
+                sufficient_data=self._feature_builder.has_sufficient_data(self._price_cache)
+            )
+            
+            return state
             
         except Exception as e:
             logger.error("Failed to build current state", error=str(e))
@@ -204,11 +243,28 @@ class MarketDataProcessor:
             
             # Update caches with latest data point from each timeframe
             timestamp = data.get("timestamp", 0)
+            
+            logger.debug(
+                "Live data received",
+                price_data_lengths={tf: len(price_data[tf]) for tf in TIMEFRAMES},
+                volume_data_lengths={tf: len(volume_data[tf]) for tf in TIMEFRAMES}
+            )
+            
             for tf in TIMEFRAMES:
                 if price_data[tf]:  # If we have data for this timeframe
-                    self._price_cache[tf].append(price_data[tf][-1])
-                    self._volume_cache[tf].append(volume_data[tf][-1])
+                    latest_price = price_data[tf][-1]
+                    latest_volume = volume_data[tf][-1]
+                    
+                    self._price_cache[tf].append(latest_price)
+                    self._volume_cache[tf].append(latest_volume)
                     self._timestamp_cache[tf].append(timestamp)
+                    
+                    logger.debug(
+                        f"Updated {tf} cache",
+                        latest_price=latest_price,
+                        latest_volume=latest_volume,
+                        cache_size=len(self._price_cache[tf])
+                    )
             
             # Store account info
             account_info = AccountInfo(
@@ -260,9 +316,16 @@ class MarketDataProcessor:
             # Update features
             self._update_features()
             
-            # Notify callbacks
-            for callback in self._data_callbacks:
-                callback(live_message)
+            # Show cache status after live data update
+            cache_status = {tf: len(self._price_cache[tf]) for tf in TIMEFRAMES}
+            logger.debug(
+                "Live data processed",
+                cache_sizes=cache_status,
+                sufficient_for_ai=self._has_sufficient_data_for_trading()
+            )
+            
+            # Notify callbacks (async)
+            asyncio.create_task(self._call_callbacks(self._data_callbacks, live_message))
             
             self._stats["messages_processed"] += 1
             return True
@@ -307,6 +370,7 @@ class MarketDataProcessor:
                 "4h": historical_data.bars_4h
             }
             
+            total_loaded = 0
             for tf, bars in timeframe_bars.items():
                 if bars:
                     # Clear existing cache and load historical data
@@ -314,25 +378,42 @@ class MarketDataProcessor:
                     self._volume_cache[tf].clear()
                     self._timestamp_cache[tf].clear()
                     
+                    # Validate and load bars
+                    valid_bars = 0
                     for bar in bars:
-                        self._price_cache[tf].append(bar.close)
-                        self._volume_cache[tf].append(bar.volume)
-                        self._timestamp_cache[tf].append(bar.timestamp)
+                        if bar.close > 0 and bar.volume >= 0:  # Basic validation
+                            self._price_cache[tf].append(bar.close)
+                            self._volume_cache[tf].append(bar.volume)
+                            self._timestamp_cache[tf].append(bar.timestamp)
+                            valid_bars += 1
+                    
+                    total_loaded += valid_bars
+                    logger.debug(
+                        "Loaded historical bars",
+                        timeframe=tf,
+                        bars_loaded=valid_bars,
+                        cache_size=len(self._price_cache[tf])
+                    )
             
             # Update features with historical data
             self._update_features()
             
-            # Notify callbacks
-            for callback in self._historical_callbacks:
-                callback(historical_data)
+            # Notify callbacks (async)
+            asyncio.create_task(self._call_callbacks(self._historical_callbacks, historical_data))
+            
+            # Show cache status after historical data loading
+            cache_status = {tf: len(self._price_cache[tf]) for tf in TIMEFRAMES}
             
             logger.info(
-                "Historical data processed",
+                "Historical data processed and cached",
+                total_bars_loaded=total_loaded,
                 bars_1m=len(historical_data.bars_1m),
                 bars_5m=len(historical_data.bars_5m),
                 bars_15m=len(historical_data.bars_15m),
                 bars_1h=len(historical_data.bars_1h),
-                bars_4h=len(historical_data.bars_4h)
+                bars_4h=len(historical_data.bars_4h),
+                cache_sizes=cache_status,
+                cache_ready=self._has_sufficient_data_for_trading()
             )
             
             self._stats["messages_processed"] += 1
@@ -340,6 +421,8 @@ class MarketDataProcessor:
             
         except Exception as e:
             logger.error("Failed to process historical data", error=str(e))
+            import traceback
+            logger.error("Historical data processing traceback", traceback=traceback.format_exc())
             return False
     
     def _process_trade_completion(self, data: Dict[str, Any]) -> bool:
@@ -371,9 +454,8 @@ class MarketDataProcessor:
             
             self._trade_history.append(trade_completion)
             
-            # Notify callbacks
-            for callback in self._trade_callbacks:
-                callback(trade_completion)
+            # Notify callbacks (async)
+            asyncio.create_task(self._call_callbacks(self._trade_callbacks, trade_completion))
             
             logger.info(
                 "Trade completion processed",
@@ -405,3 +487,32 @@ class MarketDataProcessor:
             
         except Exception as e:
             logger.error("Failed to update features", error=str(e))
+    
+    def _process_test_message(self, data: Dict[str, Any]) -> bool:
+        """Process test connection message from NinjaTrader."""
+        try:
+            message = data.get("message", "Unknown test message")
+            timestamp = data.get("timestamp", 0)
+            
+            logger.info(
+                "Test message received from NinjaTrader",
+                message=message,
+                timestamp=timestamp
+            )
+            
+            self._stats["messages_processed"] += 1
+            return True
+            
+        except Exception as e:
+            logger.error("Failed to process test message", error=str(e))
+            return False
+    
+    def _has_sufficient_data_for_trading(self) -> bool:
+        """Check if we have sufficient historical data to start AI processing."""
+        min_bars_required = 50  # Minimum bars needed for meaningful analysis
+        
+        for tf in ["1m", "5m", "15m"]:
+            if len(self._price_cache[tf]) < min_bars_required:
+                return False
+        
+        return True

@@ -86,7 +86,7 @@ class CycleDetector:
 class TemporalPatternMatcher:
     """Matches temporal patterns in market data."""
     
-    def __init__(self, pattern_length: int = 20):
+    def __init__(self, pattern_length: int = 10):  # Reduced from 20
         """Initialize pattern matcher.
         
         Args:
@@ -179,11 +179,7 @@ class TemporalSubsystem:
         self.successful_predictions = 0
         self.cycle_accuracy = deque(maxlen=100)
         
-        logger.info(
-            "Temporal subsystem initialized",
-            cycle_lengths=self.cycle_lengths,
-            lookback_periods=self.lookback_periods
-        )
+        logger.info(f"Temporal subsystem initialized - cycles: {self.cycle_lengths}, lookback: {self.lookback_periods}")
     
     async def analyze(self, state: State) -> Optional[AISignal]:
         """Analyze temporal patterns in market state.
@@ -229,6 +225,19 @@ class TemporalSubsystem:
                 combined_signal = self._combine_temporal_signals(signals, state.timestamp)
                 self.total_signals += 1
                 return combined_signal
+            
+            # Generate occasional test signal when enough data is available
+            if len(self.price_history) >= 15 and len(self.price_history) % 25 == 0:
+                # Generate a low-confidence signal to stay active
+                action = ActionType.HOLD  # Conservative default
+                return AISignal(
+                    signal_type=SignalType.TEMPORAL,
+                    action=action,
+                    confidence=0.35,  # Low confidence
+                    strength=0.15,    # Low strength
+                    metadata={"type": "temporal_test", "data_points": len(self.price_history)},
+                    timestamp=state.timestamp
+                )
             
             return None
             

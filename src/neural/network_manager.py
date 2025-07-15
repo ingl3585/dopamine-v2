@@ -78,7 +78,7 @@ class NetworkManager:
         self.inference_times: Dict[str, deque] = {}
         self.memory_usage: Dict[str, float] = {}
         
-        logger.info(
+        logger.debug(
             "Network manager initialized",
             device=str(self.device),
             hidden_layers=self.hidden_layers,
@@ -120,7 +120,7 @@ class NetworkManager:
         self.inference_times[name] = deque(maxlen=100)
         self.memory_usage[name] = 0.0
         
-        logger.info(
+        logger.debug(
             "Network registered",
             name=name,
             parameters=sum(p.numel() for p in network.parameters()),

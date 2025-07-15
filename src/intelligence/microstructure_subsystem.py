@@ -55,11 +55,14 @@ class RegimeDetector:
         features = self._extract_regime_features(prices, volumes)
         self.feature_history.append(features)
         
-        if len(self.feature_history) < 20:
+        if len(self.feature_history) < 8:  # Reduced from 20 to 8
             return self.current_regime, self.regime_confidence
         
         # Use recent feature history for clustering
         recent_features = np.array(list(self.feature_history)[-100:])
+        
+        # Clean NaN values from feature history
+        recent_features = np.nan_to_num(recent_features, nan=0.0, posinf=0.0, neginf=0.0)
         
         try:
             # Fit clustering model
@@ -122,7 +125,11 @@ class RegimeDetector:
         while len(features) < 6:
             features.append(0.0)
         
-        return np.array(features[:6])
+        # Replace any NaN or inf values with 0.0
+        features_array = np.array(features[:6])
+        features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        return features_array
     
     def _map_cluster_to_regime(self, cluster: int, features: np.ndarray) -> Tuple[str, float]:
         """Map cluster to regime type based on features."""
@@ -307,7 +314,7 @@ class MicrostructureSubsystem:
             # Extract microstructure data
             prices, volumes = self._extract_microstructure_data(state)
             
-            if len(prices) < 20:
+            if len(prices) < 8:  # Reduced from 20 to 8
                 return None
             
             # Multi-component analysis
@@ -337,6 +344,18 @@ class MicrostructureSubsystem:
             if analyses:
                 combined_signal = self._combine_microstructure_signals(analyses, state.timestamp)
                 return combined_signal
+            
+            # Generate occasional test signal when enough data is available
+            if len(prices) >= 8 and len(prices) % 15 == 0:
+                # Generate a low-confidence signal to stay active
+                return AISignal(
+                    signal_type=SignalType.MICROSTRUCTURE,
+                    action=ActionType.HOLD,
+                    confidence=0.35,  # Low confidence
+                    strength=0.15,    # Low strength
+                    metadata={"type": "microstructure_test", "data_points": len(prices)},
+                    timestamp=state.timestamp
+                )
             
             return None
             

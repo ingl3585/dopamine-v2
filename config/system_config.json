@@ -18,14 +18,14 @@
     "dna": { 
       "enabled": true, 
       "weight": 0.2,
-      "pattern_length": 10,
+      "pattern_length": 5,
       "mutation_rate": 0.01
     },
     "temporal": { 
       "enabled": true, 
       "weight": 0.2,
-      "cycle_lengths": [5, 15, 60, 240],
-      "lookback_periods": 100
+      "cycle_lengths": [3, 5, 10, 20],
+      "lookback_periods": 20
     },
     "immune": { 
       "enabled": true, 

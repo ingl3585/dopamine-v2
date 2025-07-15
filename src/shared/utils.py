@@ -21,20 +21,33 @@ logger = structlog.get_logger(__name__)
 
 
 def setup_logging(log_level: str = "INFO", log_dir: str = "logs") -> None:
-    """Set up structured logging for the system."""
+    """Set up clean, readable logging for the system."""
+    import logging
+    
     os.makedirs(log_dir, exist_ok=True)
     
+    # Simple, clean format: timestamp [file_name] [log_level] - log_content
+    clean_format = '%(asctime)s [%(filename)s] [%(levelname)s] - %(message)s'
+    
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format=clean_format,
+        datefmt='%H:%M:%S',
+        handlers=[
+            logging.StreamHandler(),  # Console output
+            logging.FileHandler(os.path.join(log_dir, 'trading_system.log'))  # File output
+        ],
+        force=True  # Force reconfiguration
+    )
+    
+    # Configure structlog to use standard logging format only
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.add_log_level,
             structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer()
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),

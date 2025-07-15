@@ -3,7 +3,13 @@
     "allow": [
       "Bash(mkdir:*)",
       "Bash(touch:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "Bash(grep:*)",
+      "Bash(timeout:*)",
+      "Bash(pip3 install:*)",
+      "Bash(ls:*)",
+      "Bash(true)"
     ],
     "deny": []
   }

@@ -18,7 +18,9 @@ from ..shared.types import (
 from ..shared.constants import (
     DEFAULT_LEARNING_RATE, DEFAULT_DISCOUNT_FACTOR, DEFAULT_EXPLORATION_RATE,
     DEFAULT_BATCH_SIZE, DEFAULT_MEMORY_SIZE, MIN_REPLAY_SIZE,
-    NETWORK_INPUT_DIM, NETWORK_OUTPUT_DIM, ACTION_SPACE_SIZE
+    NETWORK_INPUT_DIM, NETWORK_OUTPUT_DIM, ACTION_SPACE_SIZE,
+    STATE_PRICE_DIM, STATE_VOLUME_DIM, STATE_ACCOUNT_DIM, 
+    STATE_MARKET_DIM, STATE_TECHNICAL_DIM, STATE_SUBSYSTEM_DIM
 )
 
 logger = structlog.get_logger(__name__)
@@ -102,8 +104,8 @@ class RLAgent:
         hidden_layers = config.get("hidden_layers", [256, 128, 64])
         dropout_rate = config.get("dropout_rate", 0.2)
         
-        self.q_network = DQN(state_dim, hidden_layers, ACTION_SPACE_SIZE, dropout_rate)
-        self.target_network = DQN(state_dim, hidden_layers, ACTION_SPACE_SIZE, dropout_rate)
+        self.q_network = DQN(self.state_dim, hidden_layers, ACTION_SPACE_SIZE, dropout_rate)
+        self.target_network = DQN(self.state_dim, hidden_layers, ACTION_SPACE_SIZE, dropout_rate)
         
         # Optimizer
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
@@ -123,12 +125,7 @@ class RLAgent:
         # Update target network
         self.update_target_network()
         
-        logger.info(
-            "RL agent initialized",
-            state_dim=state_dim,
-            hidden_layers=hidden_layers,
-            learning_rate=self.learning_rate
-        )
+        logger.info(f"RL agent initialized - state_dim: {self.state_dim}, layers: {hidden_layers}, lr: {self.learning_rate}")
     
     def select_action(self, state: State, training: bool = True) -> Tuple[ActionType, float]:
         """Select action using epsilon-greedy policy.
@@ -340,8 +337,8 @@ class RLAgent:
             "total_reward": self.total_reward,
             "memory_size": len(self.memory),
             "exploration_rate": self.exploration_rate,
-            "avg_loss": np.mean(self.loss_history) if self.loss_history else 0.0,
-            "avg_performance": np.mean(self.performance_history) if self.performance_history else 0.0
+            "avg_loss": np.mean(list(self.loss_history)) if self.loss_history else 0.0,
+            "avg_performance": np.mean(list(self.performance_history)) if self.performance_history else 0.0
         }
     
     def save_model(self, filepath: str) -> None:
@@ -439,9 +436,9 @@ class RLAgent:
             "total_reward": self.total_reward,
             "memory_size": len(self.memory),
             "exploration_rate": self.exploration_rate,
-            "avg_loss": np.mean(self.loss_history) if self.loss_history else 0.0,
-            "avg_performance": np.mean(self.performance_history) if self.performance_history else 0.0,
-            "recent_performance": np.mean(self.performance_history[-10:]) if len(self.performance_history) >= 10 else 0.0
+            "avg_loss": np.mean(list(self.loss_history)) if self.loss_history else 0.0,
+            "avg_performance": np.mean(list(self.performance_history)) if self.performance_history else 0.0,
+            "recent_performance": np.mean(list(self.performance_history)[-10:]) if len(self.performance_history) >= 10 else 0.0
         }
     
     def load_model(self, filepath: str) -> None:

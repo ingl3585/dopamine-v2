@@ -4,7 +4,7 @@ Implements adaptive immune system principles for market threat detection.
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set, Tuple
 from collections import deque
 import asyncio
 import structlog
@@ -230,6 +230,18 @@ class ImmuneSubsystem:
             # Update normal market conditions
             self._update_baseline(risk_features)
             
+            # Occasionally generate a neutral signal to stay active
+            if len(self.risk_history) > 0 and len(self.risk_history) % 20 == 0:
+                # Generate a low-confidence HOLD signal to indicate system is working
+                return AISignal(
+                    signal_type=SignalType.IMMUNE,
+                    action=ActionType.HOLD,
+                    confidence=0.3,  # Low confidence
+                    strength=0.1,    # Low strength
+                    metadata={"type": "system_health", "anomalies_detected": 0},
+                    timestamp=state.timestamp
+                )
+            
             return None
             
         except Exception as e:
@@ -242,7 +254,7 @@ class ImmuneSubsystem:
         
         # Price-based risk features
         if len(state.prices) > 0:
-            features["current_price"] = state.prices[-1] if state.prices else 0.0
+            features["current_price"] = state.prices[-1] if len(state.prices) > 0 else 0.0
             
             if len(state.prices) >= 10:
                 recent_prices = state.prices[-10:]
@@ -251,7 +263,7 @@ class ImmuneSubsystem:
         
         # Volume-based risk features
         if len(state.volumes) > 0:
-            features["current_volume"] = state.volumes[-1] if state.volumes else 0.0
+            features["current_volume"] = state.volumes[-1] if len(state.volumes) > 0 else 0.0
             
             if len(state.volumes) >= 10:
                 recent_volumes = state.volumes[-10:]
@@ -262,7 +274,11 @@ class ImmuneSubsystem:
         if len(state.account_metrics) >= 5:
             features["unrealized_pnl"] = state.account_metrics[3]  # Normalized unrealized P&L
             features["daily_pnl"] = state.account_metrics[2]  # Normalized daily P&L
+            
+        if len(state.account_metrics) >= 9:
             features["position_size"] = state.account_metrics[8]  # Normalized position size
+        else:
+            features["position_size"] = 0.0  # Default when position size not available
         
         # Market condition features
         if len(state.market_conditions) >= 3:

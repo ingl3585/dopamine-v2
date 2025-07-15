@@ -64,11 +64,8 @@ class SubsystemManager:
         # Initialize configurations
         self._initialize_configs()
         
-        logger.info(
-            "Subsystem manager initialized",
-            enabled_subsystems=[name for name, enabled in self.enabled.items() if enabled],
-            total_weight=sum(self.weights.values())
-        )
+        enabled_names = [name for name, enabled in self.enabled.items() if enabled]
+        logger.info(f"Subsystem manager initialized - {len(enabled_names)} subsystems: {', '.join(enabled_names)}")
     
     def register_subsystem(self, name: str, subsystem: AISubsystem) -> None:
         """Register an AI subsystem.
@@ -83,7 +80,7 @@ class SubsystemManager:
         self.subsystems[name] = subsystem
         self.last_signals[name] = None
         
-        logger.info("Subsystem registered", name=name, type=type(subsystem).__name__)
+        logger.debug("Subsystem registered", name=name, type=type(subsystem).__name__)
     
     async def process_state(self, state: State) -> Dict[str, AISignal]:
         """Process market state through all enabled subsystems.
@@ -115,11 +112,17 @@ class SubsystemManager:
                     # Trim history
                     if len(self.signal_history[name]) > 1000:
                         self.signal_history[name] = self.signal_history[name][-1000:]
+                    
+                    logger.debug("Subsystem generated signal", name=name, action=signal.action.name if hasattr(signal.action, 'name') else str(signal.action))
+                else:
+                    logger.debug("Subsystem returned None (no signal)", name=name)
                         
             except Exception as e:
                 logger.error("Subsystem processing failed", name=name, error=str(e))
         
-        logger.debug("State processed", subsystems=len(signals), signals=list(signals.keys()))
+        enabled_names = list(self.enabled.keys())
+        active_names = list(signals.keys())
+        logger.info(f"Subsystems processed: {len(signals)}/{len(enabled_names)} active ({', '.join(active_names) if active_names else 'none'})")
         return signals
     
     def aggregate_signals(self, signals: Dict[str, AISignal]) -> Optional[AISignal]:
