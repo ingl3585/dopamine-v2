@@ -122,7 +122,7 @@ class IntegratedTradingSystem(TradingSystem):
                 consensus_metrics = consensus_signal.metadata.get("confidence_metrics", {})
                 
                 # Create mock metrics for RL (the actual metrics were calculated during RL selection)
-                from ..shared.confidence_manager import ConfidenceMetrics
+                from ..agent.confidence_manager import ConfidenceMetrics
                 rl_metrics = ConfidenceMetrics(
                     consensus_strength=0.0,
                     q_value_spread=0.0,  # Would be filled by actual RL calculation
@@ -378,12 +378,12 @@ class IntegratedTradingSystem(TradingSystem):
                 logger.info(
                     "Initializing AI subsystems with historical states",
                     total_states=len(states),
-                    initialization_states=min(50, len(states))
+                    initialization_states=len(states)
                 )
                 
                 # Initialize subsystems with historical data
                 successful_inits = 0
-                for i, state in enumerate(states[-50:]):  # Last 50 states
+                for i, state in enumerate(states):  # Use ALL states
                     try:
                         await self.subsystem_manager.process_state(state)
                         successful_inits += 1
@@ -391,7 +391,7 @@ class IntegratedTradingSystem(TradingSystem):
                             logger.debug(
                                 "AI initialization progress",
                                 completed=i + 1,
-                                total=min(50, len(states)),
+                                total=len(states),
                                 success_rate=f"{successful_inits/(i+1)*100:.1f}%"
                             )
                     except Exception as e:
@@ -400,7 +400,7 @@ class IntegratedTradingSystem(TradingSystem):
                 logger.info(
                     "AI initialization completed",
                     successful_states=successful_inits,
-                    total_processed=min(50, len(states)),
+                    total_processed=len(states),
                     ai_ready=True
                 )
             else:
