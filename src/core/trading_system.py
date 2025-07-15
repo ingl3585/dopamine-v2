@@ -64,6 +64,9 @@ class TradingSystem:
         self.ninja_connected = False
         self.has_historical_data = False
         
+        # Load configuration immediately
+        self._load_configuration_sync()
+        
         # Statistics
         self.stats = {
             "startup_time": 0.0,
@@ -299,6 +302,23 @@ class TradingSystem:
             logger.error("Failed to load configuration", error=str(e))
             return False
     
+    def _load_configuration_sync(self) -> None:
+        """Load system configuration synchronously during initialization."""
+        try:
+            from ..core.config_manager import ConfigManager
+            self.config_manager = ConfigManager(self.config_file)
+            self.config = self.config_manager.load_config()
+            
+            logger.debug(
+                "Configuration loaded during initialization",
+                environment=self.config.system.get("environment"),
+                subsystems_enabled=sum(1 for s in self.config.subsystems.values() if s.enabled)
+            )
+            
+        except Exception as e:
+            logger.error("Failed to load configuration during initialization", error=str(e))
+            raise RuntimeError(f"Could not load configuration: {e}")
+    
     def _setup_logging(self) -> None:
         """Setup system logging."""
         try:
@@ -360,14 +380,14 @@ class TradingSystem:
             self.rl_agent = RLAgent(
                 config=self.config.agent,
                 network_manager=self.network_manager,
-                confidence_config=self.config.get("confidence", {})
+                confidence_config=self.config.agent  # Use agent config for confidence
             )
             
             logger.info("Loading AI trading subsystems")
             # Initialize subsystem manager
             self.subsystem_manager = SubsystemManager(
                 self.config.subsystems,
-                confidence_config=self.config.get("confidence", {})
+                confidence_config=self.config.agent  # Use agent config for confidence
             )
             
             # Initialize and register AI subsystems

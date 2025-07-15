@@ -23,7 +23,7 @@ class IntegratedTradingSystem(TradingSystem):
         super().__init__(config_file)
         
         # Initialize confidence manager
-        confidence_config = self.config.get("confidence", {})
+        confidence_config = self.config.agent  # Use agent config section for confidence
         self.confidence_manager = ConfidenceManager(confidence_config)
         
         # AI processing state
