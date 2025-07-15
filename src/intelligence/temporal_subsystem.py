@@ -227,7 +227,7 @@ class TemporalSubsystem:
                 return combined_signal
             
             # Generate occasional test signal when enough data is available
-            if len(self.price_history) >= 15 and len(self.price_history) % 25 == 0:
+            if len(self.price_history) >= 8 and len(self.price_history) % 7 == 0:
                 # Generate a low-confidence signal to stay active
                 action = ActionType.HOLD  # Conservative default
                 return AISignal(

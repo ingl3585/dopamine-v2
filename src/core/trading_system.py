@@ -359,12 +359,16 @@ class TradingSystem:
             # Initialize RL agent
             self.rl_agent = RLAgent(
                 config=self.config.agent,
-                network_manager=self.network_manager
+                network_manager=self.network_manager,
+                confidence_config=self.config.get("confidence", {})
             )
             
             logger.info("Loading AI trading subsystems")
             # Initialize subsystem manager
-            self.subsystem_manager = SubsystemManager(self.config.subsystems)
+            self.subsystem_manager = SubsystemManager(
+                self.config.subsystems,
+                confidence_config=self.config.get("confidence", {})
+            )
             
             # Initialize and register AI subsystems
             dna_config = self.config.subsystems["dna"].parameters if "dna" in self.config.subsystems else {}

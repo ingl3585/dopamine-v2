@@ -10,6 +10,7 @@ import structlog
 
 from .trading_system import TradingSystem
 from ..shared.types import LiveDataMessage, HistoricalData, TradeCompletion, ActionType, State
+from ..agent.confidence_manager import ConfidenceManager
 
 logger = structlog.get_logger(__name__)
 
@@ -20,6 +21,10 @@ class IntegratedTradingSystem(TradingSystem):
     def __init__(self, config_file: str = "config/system_config.json"):
         """Initialize integrated trading system."""
         super().__init__(config_file)
+        
+        # Initialize confidence manager
+        confidence_config = self.config.get("confidence", {})
+        self.confidence_manager = ConfidenceManager(confidence_config)
         
         # AI processing state
         self.ai_processing = False
@@ -94,37 +99,79 @@ class IntegratedTradingSystem(TradingSystem):
                 # Enhance state with subsystem signals
                 enhanced_state = self._enhance_state_with_signals(current_state, subsystem_signals)
                 
-                # Get RL agent decision
-                logger.debug("Getting RL agent decision")
-                action, confidence = self.rl_agent.select_action(enhanced_state)
-                
-                logger.info(
-                    "RL agent decision",
-                    action=action.name,
-                    confidence=confidence
-                )
-                
-                # Apply dopamine subsystem learning enhancement
+                # Get dopamine boost from dopamine subsystem if available
+                dopamine_boost = 0.0
                 if "dopamine" in subsystem_signals:
                     dopamine_signal = subsystem_signals["dopamine"]
-                    learning_enhancement = dopamine_signal.metadata.get("learning_rate_multiplier", 1.0)
-                    confidence *= learning_enhancement
+                    dopamine_boost = dopamine_signal.metadata.get("learning_rate_multiplier", 1.0) - 1.0
+                    dopamine_boost = max(0.0, min(0.3, dopamine_boost))  # Cap at 0.3
                 
-                # Send trading signal if confidence is high enough
-                min_confidence = self.config.agent.get("min_confidence", 0.6)
+                # Get RL agent decision with dopamine boost
+                logger.debug("Getting RL agent decision")
+                action, rl_confidence = self.rl_agent.select_action(enhanced_state, dopamine_boost=dopamine_boost)
+                
+                logger.info(
+                    "RL agent individual decision", 
+                    action=action.name,
+                    rl_confidence=rl_confidence,
+                    dopamine_boost=dopamine_boost
+                )
+                
+                # Get consensus confidence from metadata
+                consensus_confidence = consensus_signal.confidence
+                consensus_metrics = consensus_signal.metadata.get("confidence_metrics", {})
+                
+                # Create mock metrics for RL (the actual metrics were calculated during RL selection)
+                from ..shared.confidence_manager import ConfidenceMetrics
+                rl_metrics = ConfidenceMetrics(
+                    consensus_strength=0.0,
+                    q_value_spread=0.0,  # Would be filled by actual RL calculation
+                    subsystem_agreement=0.0,
+                    exploration_penalty=0.0,
+                    dopamine_boost=dopamine_boost,
+                    final_confidence=rl_confidence
+                )
+                
+                consensus_metrics_obj = ConfidenceMetrics(
+                    consensus_strength=consensus_metrics.get("consensus_strength", 0.0),
+                    q_value_spread=0.0,
+                    subsystem_agreement=consensus_metrics.get("subsystem_agreement", 0.0),
+                    exploration_penalty=0.0,
+                    dopamine_boost=0.0,
+                    final_confidence=consensus_confidence
+                )
+                
+                # Combine confidences using the confidence manager
+                final_confidence, combined_metrics = self.confidence_manager.combine_confidences(
+                    consensus_confidence=consensus_confidence,
+                    rl_confidence=rl_confidence, 
+                    consensus_metrics=consensus_metrics_obj,
+                    rl_metrics=rl_metrics
+                )
+                
+                logger.info(
+                    "Final unified confidence decision",
+                    action=action.name,
+                    consensus_confidence=consensus_confidence,
+                    rl_confidence=rl_confidence,
+                    final_confidence=final_confidence,
+                    explanation=self.confidence_manager.get_confidence_explanation(combined_metrics)
+                )
+                
+                # Determine if trade should be executed
+                should_trade = self.confidence_manager.should_trade(final_confidence, action)
                 
                 action_name = action.name if hasattr(action, 'name') else str(action)
-                will_trade = confidence >= min_confidence and action != ActionType.HOLD
-                logger.info(f"Trading decision: {action_name} (confidence: {confidence:.2f}, min: {min_confidence}) -> {'TRADE' if will_trade else 'NO TRADE'}")
+                logger.info(f"Trading decision: {action_name} (confidence: {final_confidence:.3f}, min: {self.confidence_manager.min_confidence:.3f}) -> {'TRADE' if should_trade else 'NO TRADE'}")
                 
-                if confidence >= min_confidence and action != ActionType.HOLD:
-                    position_size = self._calculate_position_size(confidence)
+                if should_trade:
+                    position_size = self._calculate_position_size(final_confidence)
                     
-                    logger.info(f"Sending {action.name} signal - confidence: {confidence:.2f}, size: {position_size}")
+                    logger.info(f"Sending {action.name} signal - confidence: {final_confidence:.3f}, size: {position_size}")
                     
                     success = self.send_trading_signal(
                         action=action,
-                        confidence=confidence,
+                        confidence=final_confidence,
                         position_size=position_size
                     )
                     
@@ -138,10 +185,8 @@ class IntegratedTradingSystem(TradingSystem):
                     else:
                         logger.warning("Failed to send trading signal")
                 else:
-                    logger.info(
-                        "No trading signal sent",
-                        reason="confidence_too_low" if confidence < min_confidence else "action_is_hold"
-                    )
+                    reason = "confidence_too_low" if final_confidence < self.confidence_manager.min_confidence else "action_is_hold"
+                    logger.info(f"No trading signal sent - {reason}")
                 
                 # Update subsystem performance
                 self._update_subsystem_performance(subsystem_signals, consensus_signal)
@@ -149,7 +194,7 @@ class IntegratedTradingSystem(TradingSystem):
                 logger.debug(
                     "AI processing completed",
                     action=action.name,
-                    confidence=confidence,
+                    confidence=final_confidence,
                     subsystems=len(subsystem_signals)
                 )
         

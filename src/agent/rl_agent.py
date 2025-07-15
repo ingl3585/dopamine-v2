@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Any
 from collections import deque
 import random
 import structlog
@@ -22,6 +22,7 @@ from ..shared.constants import (
     STATE_PRICE_DIM, STATE_VOLUME_DIM, STATE_ACCOUNT_DIM, 
     STATE_MARKET_DIM, STATE_TECHNICAL_DIM, STATE_SUBSYSTEM_DIM
 )
+from .confidence_manager import ConfidenceManager
 
 logger = structlog.get_logger(__name__)
 
@@ -75,15 +76,20 @@ class DQN(nn.Module):
 class RLAgent:
     """Reinforcement Learning trading agent with dopamine-inspired learning."""
     
-    def __init__(self, config: dict, network_manager=None):
+    def __init__(self, config: dict, network_manager=None, confidence_config: Optional[dict] = None):
         """Initialize RL agent.
         
         Args:
             config: Agent configuration parameters
             network_manager: Optional network manager for neural networks
+            confidence_config: Configuration for confidence manager
         """
         self.config = config
         self.network_manager = network_manager
+        
+        # Initialize confidence manager
+        confidence_config = confidence_config or {}
+        self.confidence_manager = ConfidenceManager(confidence_config)
         
         # Calculate state dimension from constants
         self.state_dim = (STATE_PRICE_DIM + STATE_VOLUME_DIM + STATE_ACCOUNT_DIM + 
@@ -127,12 +133,13 @@ class RLAgent:
         
         logger.info(f"RL agent initialized - state_dim: {self.state_dim}, layers: {hidden_layers}, lr: {self.learning_rate}")
     
-    def select_action(self, state: State, training: bool = True) -> Tuple[ActionType, float]:
+    def select_action(self, state: State, training: bool = True, dopamine_boost: float = 0.0) -> Tuple[ActionType, float]:
         """Select action using epsilon-greedy policy.
         
         Args:
             state: Current market state
             training: Whether in training mode
+            dopamine_boost: Additional confidence boost from dopamine system
             
         Returns:
             Tuple[ActionType, float]: Selected action and confidence
@@ -141,49 +148,60 @@ class RLAgent:
             # Convert state to tensor
             state_tensor = self._state_to_tensor(state)
             
-            # Epsilon-greedy action selection
-            if training and random.random() < self.exploration_rate:
+            # Check if using exploration
+            is_exploration = training and random.random() < self.exploration_rate
+            
+            if is_exploration:
                 # Random exploration
                 action_idx = random.randint(0, ACTION_SPACE_SIZE - 1)
-                confidence = 0.3  # Low confidence for random actions
+                # Use dummy Q-values for exploration confidence calculation
+                q_values = np.array([0.0, 0.0, 0.0])
+                q_values[action_idx] = 0.1  # Small positive value for selected action
             else:
                 # Greedy action selection
                 with torch.no_grad():
-                    q_values = self.q_network(state_tensor)
-                    action_idx = q_values.argmax().item()
-                    
-                    # Calculate confidence from Q-values
-                    q_vals_np = q_values.cpu().numpy()
-                    max_q = np.max(q_vals_np)
-                    confidence = min(1.0, max(0.1, (max_q + 1.0) / 2.0))  # Normalize to [0.1, 1.0]
+                    q_values_tensor = self.q_network(state_tensor)
+                    action_idx = q_values_tensor.argmax().item()
+                    q_values = q_values_tensor.cpu().numpy()
             
             action = ActionType(action_idx)
             
+            # Use confidence manager to calculate confidence
+            confidence, confidence_metrics = self.confidence_manager.calculate_rl_confidence(
+                q_values=q_values,
+                is_exploration=is_exploration,
+                dopamine_boost=dopamine_boost
+            )
+            
             logger.debug(
-                "Action selected",
+                "RL action selected",
                 action=action.name,
                 confidence=confidence,
                 exploration_rate=self.exploration_rate,
-                training=training
+                is_exploration=is_exploration,
+                dopamine_boost=dopamine_boost,
+                training=training,
+                explanation=self.confidence_manager.get_confidence_explanation(confidence_metrics)
             )
             
             return action, confidence
             
         except Exception as e:
             logger.error("Failed to select action", error=str(e))
-            return ActionType.HOLD, 0.1
+            return ActionType.HOLD, self.confidence_manager.min_confidence
     
-    async def select_action_async(self, state: State, training: bool = True) -> Tuple[ActionType, float]:
+    async def select_action_async(self, state: State, training: bool = True, dopamine_boost: float = 0.0) -> Tuple[ActionType, float]:
         """Async version of select_action for compatibility.
         
         Args:
             state: Current market state
             training: Whether in training mode
+            dopamine_boost: Additional confidence boost from dopamine system
             
         Returns:
             Tuple[ActionType, float]: Selected action and confidence
         """
-        return self.select_action(state, training)
+        return self.select_action(state, training, dopamine_boost)
     
     def store_experience(self, state: State, action: ActionType, reward: float,
                         next_state: State, done: bool) -> None:

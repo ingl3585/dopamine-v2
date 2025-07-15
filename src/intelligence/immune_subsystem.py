@@ -231,7 +231,7 @@ class ImmuneSubsystem:
             self._update_baseline(risk_features)
             
             # Occasionally generate a neutral signal to stay active
-            if len(self.risk_history) > 0 and len(self.risk_history) % 20 == 0:
+            if len(self.risk_history) > 0 and len(self.risk_history) % 3 == 0:
                 # Generate a low-confidence HOLD signal to indicate system is working
                 return AISignal(
                     signal_type=SignalType.IMMUNE,

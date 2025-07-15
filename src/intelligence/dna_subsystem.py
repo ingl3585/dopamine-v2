@@ -124,6 +124,7 @@ class DNASubsystem:
             # Extract current pattern from state
             current_pattern = self._extract_pattern(state)
             if current_pattern is None:
+                logger.debug(f"DNA: No pattern extracted - prices: {len(state.prices)}, required: {self.pattern_length}")
                 return None
             
             # Store pattern in history
@@ -148,7 +149,7 @@ class DNASubsystem:
                 await self._evolve_patterns()
             
             # Generate occasional test signal when enough patterns are collected
-            if len(self.pattern_history) >= 10 and len(self.pattern_history) % 30 == 0:
+            if len(self.pattern_history) >= 3 and len(self.pattern_history) % 4 == 0:
                 # Generate a low-confidence signal to stay active
                 action = ActionType.HOLD  # Conservative default
                 return AISignal(

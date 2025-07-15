@@ -15,6 +15,7 @@ from ..shared.types import (
 from ..shared.constants import (
     SUBSYSTEM_NAMES, DEFAULT_SUBSYSTEM_WEIGHT, MIN_CONFIDENCE_THRESHOLD
 )
+from ..agent.confidence_manager import ConfidenceManager
 
 logger = structlog.get_logger(__name__)
 
@@ -41,16 +42,21 @@ class AISubsystem(Protocol):
 class SubsystemManager:
     """Manages and coordinates all AI subsystems with clean architecture."""
     
-    def __init__(self, config: Dict[str, SubsystemConfig]):
+    def __init__(self, config: Dict[str, SubsystemConfig], confidence_config: Optional[Dict[str, Any]] = None):
         """Initialize subsystem manager.
         
         Args:
             config: Configuration for each subsystem
+            confidence_config: Configuration for confidence manager
         """
         self.config = config
         self.subsystems: Dict[str, AISubsystem] = {}
         self.weights: Dict[str, float] = {}
         self.enabled: Dict[str, bool] = {}
+        
+        # Initialize confidence manager
+        confidence_config = confidence_config or {}
+        self.confidence_manager = ConfidenceManager(confidence_config)
         
         # Performance tracking
         self.signal_history: Dict[str, List[AISignal]] = {name: [] for name in SUBSYSTEM_NAMES}
@@ -146,7 +152,6 @@ class SubsystemManager:
             }
             
             total_weight = 0.0
-            confidence_sum = 0.0
             metadata_combined = {}
             
             for name, signal in signals.items():
@@ -157,7 +162,6 @@ class SubsystemManager:
                 
                 action_votes[signal.action] += effective_weight
                 total_weight += effective_weight
-                confidence_sum += signal.confidence * weight
                 
                 # Combine metadata
                 metadata_combined[f"{name}_confidence"] = signal.confidence
@@ -175,31 +179,40 @@ class SubsystemManager:
                 winning_action = ActionType.HOLD
                 consensus_strength = 0.5
             
-            # Calculate overall confidence
-            avg_confidence = confidence_sum / sum(self.weights.get(name, DEFAULT_SUBSYSTEM_WEIGHT) 
-                                                for name in signals.keys())
+            # Use confidence manager to calculate consensus confidence
+            consensus_confidence, confidence_metrics = self.confidence_manager.calculate_consensus_confidence(
+                signals, self.weights
+            )
+            
+            # Add confidence metrics to metadata
+            metadata_combined.update({
+                "consensus_method": self.conflict_resolution_method,
+                "participating_subsystems": list(signals.keys()),
+                "total_weight": total_weight,
+                "confidence_metrics": {
+                    "consensus_strength": confidence_metrics.consensus_strength,
+                    "subsystem_agreement": confidence_metrics.subsystem_agreement,
+                    "final_confidence": confidence_metrics.final_confidence
+                }
+            })
             
             # Create consensus signal
             consensus_signal = AISignal(
                 signal_type=SignalType.DOPAMINE,  # Manager signal type
                 action=winning_action,
-                confidence=min(avg_confidence, consensus_strength),
+                confidence=consensus_confidence,
                 strength=consensus_strength,
-                metadata={
-                    **metadata_combined,
-                    "consensus_method": self.conflict_resolution_method,
-                    "participating_subsystems": list(signals.keys()),
-                    "total_weight": total_weight
-                },
+                metadata=metadata_combined,
                 timestamp=max(signal.timestamp for signal in signals.values())
             )
             
-            logger.debug(
-                "Signals aggregated",
+            logger.info(
+                "Consensus signal generated",
                 action=winning_action.name,
-                confidence=consensus_signal.confidence,
+                confidence=consensus_confidence,
                 strength=consensus_strength,
-                participants=len(signals)
+                participants=len(signals),
+                explanation=self.confidence_manager.get_confidence_explanation(confidence_metrics)
             )
             
             return consensus_signal

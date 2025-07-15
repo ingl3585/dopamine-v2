@@ -9,7 +9,8 @@
       "Bash(timeout:*)",
       "Bash(pip3 install:*)",
       "Bash(ls:*)",
-      "Bash(true)"
+      "Bash(true)",
+      "Bash(mv:*)"
     ],
     "deny": []
   }

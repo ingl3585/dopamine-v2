@@ -24,8 +24,6 @@ def setup_logging(log_level: str = "INFO", log_dir: str = "logs") -> None:
     """Set up clean, readable logging for the system."""
     import logging
     
-    os.makedirs(log_dir, exist_ok=True)
-    
     # Simple, clean format: timestamp [file_name] [log_level] - log_content
     clean_format = '%(asctime)s [%(filename)s] [%(levelname)s] - %(message)s'
     
@@ -34,8 +32,7 @@ def setup_logging(log_level: str = "INFO", log_dir: str = "logs") -> None:
         format=clean_format,
         datefmt='%H:%M:%S',
         handlers=[
-            logging.StreamHandler(),  # Console output
-            logging.FileHandler(os.path.join(log_dir, 'trading_system.log'))  # File output
+            logging.StreamHandler(),  # Console output only
         ],
         force=True  # Force reconfiguration
     )

@@ -55,7 +55,7 @@ class RegimeDetector:
         features = self._extract_regime_features(prices, volumes)
         self.feature_history.append(features)
         
-        if len(self.feature_history) < 8:  # Reduced from 20 to 8
+        if len(self.feature_history) < 5:  # Reduced from 8 to 5
             return self.current_regime, self.regime_confidence
         
         # Use recent feature history for clustering
@@ -314,7 +314,7 @@ class MicrostructureSubsystem:
             # Extract microstructure data
             prices, volumes = self._extract_microstructure_data(state)
             
-            if len(prices) < 8:  # Reduced from 20 to 8
+            if len(prices) < 5:  # Reduced from 8 to 5
                 return None
             
             # Multi-component analysis
@@ -346,7 +346,7 @@ class MicrostructureSubsystem:
                 return combined_signal
             
             # Generate occasional test signal when enough data is available
-            if len(prices) >= 8 and len(prices) % 15 == 0:
+            if len(prices) >= 3 and len(prices) % 4 == 0:
                 # Generate a low-confidence signal to stay active
                 return AISignal(
                     signal_type=SignalType.MICROSTRUCTURE,
